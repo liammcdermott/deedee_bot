@@ -36,6 +36,7 @@ responses = [ ("@deedee", paranoidQuit)
             , ("orange peel", randomItem ["Reminds of this bloke I met on the bus. He was a psycho.", "Orange peels. Fookin' orange peels. Just doesn't add up.", "Scariest thing I've ever seen in my life."] >>= privmsg)
             , ("les porter", privmsg "Here, what's the bets his name was Smith or something but he changed it to fit in.")
             , ("fookin", privmsg "fookin'")
+            , ("jonathan boakes", privmsg "Fookin' on the train right and the twat sitting opposite me is like that. Mmmm Ghost Stories. http://www.adventureclassicgaming.com/images/galleries/242/242_1.jpg")
             ]
   where
     randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
@@ -108,6 +109,7 @@ eval     "!last said"          = getLastPosted >>= \s -> privmsg' s
 eval     "!last diff"          = liftIO getCurrentTime >>= \now -> gets lastPosted >>= \zero -> privmsg' (show (diffUTCTime now zero) ++ " since I last give it a wee dunt.")
 -- Pseudo-random, since it's not important.
 eval     "!random"             = randomNet ((0 :: Int), (100 :: Int)) >>= privmsg . show
+eval     "!source"             = privmsg "My source code is available at: https://github.com/liammcdermott/deedee_bot/blob/master/deedee_bot.hs you can submit changes to my responses there."
 eval x | "!id " `isPrefixOf` x = privmsg (drop 4 x)
 eval x                         = otherResponse (strToLower x)
 
