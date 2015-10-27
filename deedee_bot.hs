@@ -13,8 +13,8 @@ import Data.Char (toLower, isAlpha)
 server = "irc.twitch.tv"
 port   = 6667
 chan   = "#sirrufert"
-nick   = "deedee_bot"
-pass   = "oauth:jr9eea1i7k0t3xp2f2jsskitgqg2b1"
+nick   = "enter your nick here"
+pass   = "enter your password here"
 
 responses = [ ("@deedee", paranoidQuit)
             , ("dee dee", paranoidQuit)
