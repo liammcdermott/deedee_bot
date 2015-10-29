@@ -35,7 +35,7 @@ responses = [ ("@deedee", paranoidQuit)
             , ("yoker", randomNet (0 :: Int, 10 :: Int) >>= yokerResponse)
             , ("orange peel", randomItem ["Reminds of this bloke I met on the bus. He was a psycho.", "Orange peels. Fookin' orange peels. Just doesn't add up.", "Scariest thing I've ever seen in my life."] >>= privmsg)
             , ("les porter", privmsg "Here, what's the bets his name was Smith or something but he changed it to fit in.")
-            , ("fookin", privmsg "fookin'")
+            , ("fookin", randomItem ["fookin'", "news"] >>= privmsg)
             , ("jonathan boakes", privmsg "Fookin' I was on the train right, and the twat sitting opposite me is like that. Mmmm Ghost Stories. http://www.adventureclassicgaming.com/images/galleries/242/242_1.jpg" >> privmsg "But I thought to myself: Dee Dee, something's not right with this picture. That bloke's had that book open 20 minutes, pure intense reading but he's not got past the first page yet.")
             ]
   where
