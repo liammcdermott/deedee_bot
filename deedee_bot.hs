@@ -37,6 +37,7 @@ responses = [ ("@deedee", paranoidQuit)
             , ("les porter", privmsg "Here, what's the bets his name was Smith or something but he changed it to fit in.")
             , ("fookin", randomItem ["fookin'", "news"] >>= privmsg)
             , ("jonathan boakes", privmsg "Fookin' I was on the train right, and the twat sitting opposite me is like that. Mmmm Ghost Stories. http://www.adventureclassicgaming.com/images/galleries/242/242_1.jpg" >> privmsg "But I thought to myself: Dee Dee, something's not right with this picture. That bloke's had that book open 20 minutes, pure intense reading but he's not got past the first page yet.")
+            , ("helloween", privmsg "Helloween fookin' 45 45? Said his hair smells lush, but personally I find him scarier than the laughing cow: http://i.imgur.com/kgMvFfg.gifv")
             ]
   where
     randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
