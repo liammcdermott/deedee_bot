@@ -37,11 +37,11 @@ responses = [ ("@deedee", paranoidQuit)
             , ("les porter", privmsg "Here, what's the bets his name was Smith or something but he changed it to fit in.")
             , ("fookin", randomItem ["fookin'", "news"] >>= privmsg)
             , ("jonathan boakes", privmsg "Fookin' I was on the train right, and the twat sitting opposite me is like that. Mmmm Ghost Stories. http://www.adventureclassicgaming.com/images/galleries/242/242_1.jpg" >> privmsg "But I thought to myself: Dee Dee, something's not right with this picture. That bloke's had that book open 20 minutes, pure intense reading but he's not got past the first page yet.")
-            , ("helloween", privmsg "Helloween fookin' 45 45? He said his hair smells lush, but I reckon he's scarier than the laughing cow: http://i.imgur.com/kgMvFfg.gifv")
+            , ("helloween", privmsg "Fookin' 45 45? I was like that: http://i.imgur.com/kgMvFfg.gifv")
             ]
   where
     randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
-    paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> write "QUIT" ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
+    paranoidQuit = paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> privmsg "/me quits. Just wasn't worth it." >> write "QUIT" ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
     yokerResponse r | r == 0 = privmsg "I'm not from Yoker, I've got no business being here!" >> privmsg "Gets to the bus but he wouldn't let me in. I was like that, set up, whole thing's a set up." >> privmsg "Them that were on that front bus, actors, the lot of them actors." >> privmsg "Door opens and I bolts upstairs, right under the seat. Didn't dare poke my head up for the next half hour in case they were going by in a minibus, gasping to feast on me like a shower of zombie pirates." >> privmsg "Picked a moment." >> privmsg "Quit the channel." >> write "QUIT" ":But the best day of my life." >> liftIO (exitWith ExitSuccess)
                     | r >= 1 = randomItem ["Yoker's one of these places I only know from the front of a bus. Never been there, don't know what it's like.", "Pure fabled land.", "Sounds like a pure mad egg yolk."] >>= privmsg
 
@@ -82,7 +82,7 @@ run = do
   write "NICK" nick
   write "USER" (nick ++ " 0 * :deedee_bot")
   write "JOIN" chan
-  privmsg "fookin'"
+  privmsg "Scary man scary, but the best day of my life.'"
   gets socket >>= listen
 
 -- Process each line from the server
