@@ -7,6 +7,8 @@ import System.Random
 import Control.Arrow
 import Control.Monad.State
 import Control.Exception
+import Control.Concurrent
+import Control.Concurrent.STM
 import Text.Printf
 import Data.Char (toLower, isAlpha)
 
@@ -41,7 +43,7 @@ responses = [ ("@deedee", paranoidQuit)
             ]
   where
     randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
-    paranoidQuit = paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> privmsg "/me quits. Just wasn't worth it." >> write "QUIT" ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
+    paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> privmsg "/me quits. Just wasn't worth it." >> write "QUIT" ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
     yokerResponse r | r == 0 = privmsg "I'm not from Yoker, I've got no business being here!" >> privmsg "Gets to the bus but he wouldn't let me in. I was like that, set up, whole thing's a set up." >> privmsg "Them that were on that front bus, actors, the lot of them actors." >> privmsg "Door opens and I bolts upstairs, right under the seat. Didn't dare poke my head up for the next half hour in case they were going by in a minibus, gasping to feast on me like a shower of zombie pirates." >> privmsg "Picked a moment." >> privmsg "Quit the channel." >> write "QUIT" ":But the best day of my life." >> liftIO (exitWith ExitSuccess)
                     | r >= 1 = randomItem ["Yoker's one of these places I only know from the front of a bus. Never been there, don't know what it's like.", "Pure fabled land.", "Sounds like a pure mad egg yolk."] >>= privmsg
 
@@ -49,7 +51,7 @@ responses = [ ("@deedee", paranoidQuit)
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
 type Net = StateT Bot IO
-data Bot = Bot { socket :: Handle, lastPosted :: UTCTime, rng :: StdGen }
+data Bot = Bot { socket :: Handle, lastPosted :: UTCTime, something :: TVar Int, rng :: StdGen }
 
 -- Set up actions to run on start and end, and run the main loop
 main :: IO ()
@@ -63,10 +65,10 @@ connect :: IO Bot
 connect = notify $ do
   h <- connectTo server (PortNumber (fromIntegral port))
   t <- getCurrentTime
+  tv <- atomically (newTVar 3)
   e <- entropy
-  printf "Time: %s" $ show t
   hSetBuffering h NoBuffering
-  return (Bot h t $ mkStdGen e)
+  return (Bot h t tv $ mkStdGen e)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
@@ -82,7 +84,7 @@ run = do
   write "NICK" nick
   write "USER" (nick ++ " 0 * :deedee_bot")
   write "JOIN" chan
-  privmsg "Scary man scary, but the best day of my life.'"
+  privmsg "Scary man scary, but the best day of my life."
   gets socket >>= listen
 
 -- Process each line from the server
@@ -90,7 +92,9 @@ listen :: Handle -> Net ()
 listen h = forever $ do
   s <- init `fmap` liftIO (hGetLine h)
   liftIO (putStrLn s)
-  preEval s
+  st <- get
+  liftIO . forkIO $ do
+    evalStateT (liftIO (putStrLn "forking!") >> preEval s) st
   where
     forever a = a >> forever a
 
