@@ -51,7 +51,7 @@ responses = [ ("@deedee", paranoidQuit)
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
 type Net = StateT Bot IO
-data Bot = Bot { socket :: Handle, lastPosted :: UTCTime, something :: TVar Int, rng :: StdGen }
+data Bot = Bot { socket :: Handle, lastPosted :: TVar UTCTime, something :: TVar Int, rng :: TVar StdGen }
 
 -- Set up actions to run on start and end, and run the main loop
 main :: IO ()
@@ -64,11 +64,13 @@ main = bracket connect disconnect loop
 connect :: IO Bot
 connect = notify $ do
   h <- connectTo server (PortNumber (fromIntegral port))
-  t <- getCurrentTime
+  t' <- getCurrentTime
+  t <- atomically (newTVar t')
   tv <- atomically (newTVar 3)
-  e <- entropy
+  e' <- entropy
+  e <- atomically (newTVar $ mkStdGen e')
   hSetBuffering h NoBuffering
-  return (Bot h t tv $ mkStdGen e)
+  return (Bot h t tv e)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
@@ -111,7 +113,13 @@ eval :: String -> Net ()
 eval     "!quit"               = write "QUIT" ":Exiting" >> liftIO (exitWith ExitSuccess)
 eval     "!kill jester"        = write "KICK" (chan ++ " smallangrycrab")
 eval     "!last said"          = getLastPosted >>= \s -> privmsg' s
-eval     "!last diff"          = liftIO getCurrentTime >>= \now -> gets lastPosted >>= \zero -> privmsg' (show (diffUTCTime now zero) ++ " since I last give it a wee dunt.")
+eval     "!last diff"          = do
+                                   let duntText = " since I last give it a wee dunt."
+                                   now <- liftIO getCurrentTime
+                                   zero' <- gets lastPosted
+                                   zero <- liftIO $ atomically (readTVar zero')
+                                   privmsg' $ show (diffUTCTime now zero) ++ duntText
+eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay 10000000) >> privmsg "Amazing what they can do these days with threading and that."
 -- Pseudo-random, since it's not important.
 eval     "!random"             = randomNet ((0 :: Int), (100 :: Int)) >>= privmsg . show
 eval     "!source"             = privmsg "My source code is available at: https://github.com/liammcdermott/deedee_bot/blob/master/deedee_bot.hs you can submit changes to my responses there."
@@ -120,7 +128,13 @@ eval x                         = otherResponse (strToLower x)
 
 -- Get a random number and update the bot's state with the new generator.
 randomNet :: (Random a) => (a, a) -> Net a
-randomNet range = gets rng >>= \r -> let (i, g) = randomR range r in get >>= \bot -> put bot { rng = g } >> return i
+randomNet range = gets rng >>= \rt -> liftIO $ atomically (randomNumberage rt range) >>= \(i, g) -> return i
+
+randomNumberage rt range = do
+  r <- readTVar rt
+  let (i, g) = randomR range r
+  writeTVar rt g
+  return (i, g)
 
 otherResponse :: String -> Net ()
 otherResponse x = case lookupResponse x responses of
@@ -140,13 +154,14 @@ strToLower s = [ toLower s' | s' <- s ]
 
 getLastPosted :: Net String
 getLastPosted = do
-  t <- gets lastPosted
-  return $ show t
+  t' <- gets lastPosted
+  t <- liftIO $ atomically (readTVar t')
+  return (show t)
 
 -- Send a privmsg to the current chan + server
 privmsg :: String -> Net ()
 privmsg s = privmsg' s
-  >> liftIO getCurrentTime >>= \t -> get >>= \bot -> put bot { lastPosted = t }
+  >> liftIO getCurrentTime >>= \t -> gets lastPosted >>= \lp' -> liftIO $ atomically (writeTVar lp' t)
 
 -- Send a privmsg without updating lastPosted time.
 privmsg' s = write "PRIVMSG" (chan ++ " :" ++ s)
