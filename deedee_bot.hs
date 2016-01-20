@@ -96,7 +96,7 @@ listen h = forever $ do
   liftIO (putStrLn s)
   st <- get
   liftIO . forkIO $ do
-    evalStateT (liftIO (putStrLn "forking!") >> preEval s) st
+    evalStateT (preEval s) st
   where
     forever a = a >> forever a
 
@@ -128,17 +128,16 @@ eval x                         = otherResponse (strToLower x)
 
 -- Get a random number and update the bot's state with the new generator.
 randomNet :: (Random a) => (a, a) -> Net a
-randomNet range = gets rng >>= \rt -> liftIO $ atomically (randomNumberage rt range) >>= \(i, g) -> return i
-
-randomNumberage rt range = do
-  r <- readTVar rt
-  let (i, g) = randomR range r
-  writeTVar rt g
-  return (i, g)
+randomNet range = gets rng >>= \rt -> liftIO $ atomically (randomAtom rt range) >>= \(i, g) -> return i
+  where
+    randomAtom rt range = do
+      r <- readTVar rt
+      let (i, g) = randomR range r
+      writeTVar rt g
+      return (i, g)
 
 otherResponse :: String -> Net ()
 otherResponse x = case lookupResponse x responses of
-                    -- Just r  -> (randomItem r) >>= privmsg
                     Just r -> r
                     Nothing -> return ()
 
