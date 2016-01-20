@@ -113,13 +113,9 @@ eval :: String -> Net ()
 eval     "!quit"               = write "QUIT" ":Exiting" >> liftIO (exitWith ExitSuccess)
 eval     "!kill jester"        = write "KICK" (chan ++ " smallangrycrab")
 eval     "!last said"          = getLastPosted >>= \s -> privmsg' s
-eval     "!last diff"          = do
-                                   let duntText = " since I last give it a wee dunt."
-                                   now <- liftIO getCurrentTime
-                                   zero' <- gets lastPosted
-                                   zero <- liftIO $ atomically (readTVar zero')
-                                   privmsg' $ show (diffUTCTime now zero) ++ duntText
-eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay 10000000) >> privmsg "Amazing what they can do these days with threading and that."
+eval     "!last diff"          = let duntText = " since I last give it a wee dunt."
+                                 in lastDiff >>= \t -> privmsg' ((show t) ++ duntText)
+eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay 20000000) >> privmsg "Amazing what they can do these days with threading and that."
 -- Pseudo-random, since it's not important.
 eval     "!random"             = randomNet ((0 :: Int), (100 :: Int)) >>= privmsg . show
 eval     "!source"             = privmsg "My source code is available at: https://github.com/liammcdermott/deedee_bot/blob/master/deedee_bot.hs you can submit changes to my responses there."
@@ -135,6 +131,13 @@ randomNet range = gets rng >>= \rt -> liftIO $ atomically (randomAtom rt range) 
       let (i, g) = randomR range r
       writeTVar rt g
       return (i, g)
+
+lastDiff :: Net NominalDiffTime
+lastDiff = do
+  now <- liftIO getCurrentTime
+  zero' <- gets lastPosted
+  zero <- liftIO $ atomically (readTVar zero')
+  return $ diffUTCTime now zero
 
 otherResponse :: String -> Net ()
 otherResponse x = case lookupResponse x responses of
