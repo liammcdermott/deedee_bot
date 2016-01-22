@@ -168,9 +168,22 @@ privmsg s = privmsg' s
 -- Send a privmsg without updating lastPosted time.
 privmsg' s = write "PRIVMSG" (chan ++ " :" ++ s)
 
--- Send a message out to the server we're currently connected to
+-- Send a message out to the server we're currently connected to.
+-- Handles timing so bot does not flood the channel.
 write :: String -> String -> Net ()
 write s t = do
+  let min = 2
+  diff <- lastDiff
+  if diff > min
+    then write' s t
+    else (liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)) >> write s t
+
+diffTimeToMicroseconds :: NominalDiffTime -> Int
+diffTimeToMicroseconds x = ceiling (x * (10 ^ 6))
+
+-- Low level function, sends a message to the connected server.
+write' :: String -> String -> Net ()
+write' s t = do
     h <- gets socket
     liftIO $ hPrintf h "%s %s\r\n" s t
     liftIO $ printf    "> %s %s\n" s t
