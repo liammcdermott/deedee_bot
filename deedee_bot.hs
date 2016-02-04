@@ -9,6 +9,7 @@ import Control.Monad.State
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.STM
+import Control.Concurrent.Async
 import Text.Printf
 import Data.Char (toLower, isAlpha)
 
@@ -42,16 +43,15 @@ responses = [ ("@deedee", paranoidQuit)
             , ("helloween", privmsg "Fookin' 45 45? I was like that: http://i.imgur.com/kgMvFfg.gifv")
             ]
   where
-    randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
     paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> privmsg "/me quits. Just wasn't worth it." >> write "QUIT" ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
     yokerResponse r | r == 0 = privmsg "I'm not from Yoker, I've got no business being here!" >> privmsg "Gets to the bus but he wouldn't let me in. I was like that, set up, whole thing's a set up." >> privmsg "Them that were on that front bus, actors, the lot of them actors." >> privmsg "Door opens and I bolts upstairs, right under the seat. Didn't dare poke my head up for the next half hour in case they were going by in a minibus, gasping to feast on me like a shower of zombie pirates." >> privmsg "Picked a moment." >> privmsg "Quit the channel." >> write "QUIT" ":But the best day of my life." >> liftIO (exitWith ExitSuccess)
                     | r >= 1 = randomItem ["Yoker's one of these places I only know from the front of a bus. Never been there, don't know what it's like.", "Pure fabled land.", "Sounds like a pure mad egg yolk."] >>= privmsg
 
-
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
 type Net = StateT Bot IO
-data Bot = Bot { socket :: Handle, lastPosted :: TVar UTCTime, something :: TVar Int, rng :: TVar StdGen }
+data Bot = Bot { socket :: Handle, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, something :: TVar Int, rng :: TVar StdGen }
+data LastSeen = LastSeen { postLastSeen :: String, timeLastSeen :: UTCTime } deriving (Show)
 
 -- Set up actions to run on start and end, and run the main loop
 main :: IO ()
@@ -66,11 +66,12 @@ connect = notify $ do
   h <- connectTo server (PortNumber (fromIntegral port))
   t' <- getCurrentTime
   t <- atomically (newTVar t')
+  l <- atomically (newTVar $ LastSeen "" t')
   tv <- atomically (newTVar 3)
   e' <- entropy
   e <- atomically (newTVar $ mkStdGen e')
   hSetBuffering h NoBuffering
-  return (Bot h t tv e)
+  return (Bot h l t tv e)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
@@ -87,7 +88,42 @@ run = do
   write "USER" (nick ++ " 0 * :deedee_bot")
   write "JOIN" chan
   privmsg "Scary man scary, but the best day of my life."
-  gets socket >>= listen
+  sock <- gets socket
+  state <- get
+  r <- liftIO $ mapConcurrently (\f -> evalStateT (f sock) state) [talk, listen]
+  liftIO (putStrLn $ show r)
+
+-- Potentially say something if the room goes quiet.
+talk :: Handle -> Net ()
+talk h = forever $ do
+  l' <- gets lastSeen
+  l <- liftIO $ atomically (readTVar l')
+  now <- liftIO getCurrentTime
+  lastSaid <- lastDiff
+  let diff = diffUTCTime now (timeLastSeen l)
+  when (diff > min && diff <= max && lastSaid > interval) (privmsg "Got one of them cockrings.")
+  if (diff > min)
+    then liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)
+    else liftIO $ threadDelay $ 30 * (10 ^ 6)
+  where
+    min = 2
+    max = 20 * 60
+    interval = 30
+    forever a = a >> forever a
+-- min time: time after someone says something that Dee Dee will consider
+-- saying something himself.
+--
+-- max time: time after someone says something that Dee Dee will consider
+-- everyone to have left, so he should not say anything to an empty room.
+--
+-- interval: how often Dee Dee should consider the above values.
+--
+-- probability: if all else aligns and Dee Dee considers it worth him
+-- spinning some banter, what is the probability he actually will.
+--
+-- The first iteration should just say the odd random thing now and then,
+-- future versions should wait for responses from people and respond
+-- in kind.
 
 -- Process each line from the server
 listen :: Handle -> Net ()
@@ -102,16 +138,31 @@ listen h = forever $ do
 
 preEval :: String -> Net ()
 preEval x | ping x     = pong x
-          | otherwise  = eval (clean x)
+          | otherwise  = eval (clean x) >> setLastSeen (clean x)
   where
     clean = drop 1 . dropWhile (/= ':') . drop 1
     ping y = "PING :" `isPrefixOf` y
     pong y = write "PONG" (':' : drop 6 y)
 
+randomItem :: [a] -> Net a
+randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
+
+-- Sets the last seen record using string and current time.
+setLastSeen :: String -> Net ()
+setLastSeen x = gets lastSeen >>= \l -> liftIO getCurrentTime >>= \t -> liftIO $ atomically (writeTVar l $ LastSeen x t)
+
+-- Raw show of last seen post data.
+getLastSeen :: Net String
+getLastSeen = do
+  l' <- gets lastSeen
+  l <- liftIO $ atomically (readTVar l')
+  return (show l)
+
 -- Dispatch a command
 eval :: String -> Net ()
 eval     "!quit"               = write "QUIT" ":Exiting" >> liftIO (exitWith ExitSuccess)
 eval     "!kill jester"        = write "KICK" (chan ++ " smallangrycrab")
+eval     "!last seen"          = getLastSeen >>= privmsg'
 eval     "!last said"          = getLastPosted >>= \s -> privmsg' s
 eval     "!last diff"          = let duntText = " since I last give it a wee dunt."
                                  in lastDiff >>= \t -> privmsg' ((show t) ++ duntText)
