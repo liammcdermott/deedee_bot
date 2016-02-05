@@ -19,6 +19,17 @@ chan   = "#sirrufert"
 nick   = "enter your nick here"
 pass   = "enter your password here"
 
+partyChat = randomItem [ privmsg "Fookin'" >> privmsg "I don't even know."
+            , privmsg "Got one of them cockrings."
+            , privmsg "Fookin' I've been doing a power of sleeping right?" >> privmsg "Any time I've been wakening up, morning noon or night, I've just been like that" >> privmsg "Pfffff aye right. Back to sleep." >> privmsg "Honestly, every hour God sends man pure lying in my scratch all like a mad cat."
+            , privmsg "I just want to know if were up on that death slide or no, I could be in trouble with the police."
+            , privmsg "Cool right, just enough's enough, just leave it."
+            , privmsg "Fookin' heading to The Brew, heading to get my Giro."
+            , privmsg "This silence is ridiculous, never used to be like this with the corporation chat."
+            , privmsg "Fookin'" >> privmsg "I was on the bus right and out the corner of my eye I spots the scariest thing of my life." >> (liftIO $ threadDelay (5 * (10 ^ 6))) >> privmsg "Hanging out the pocket of the guy standing next to us. Orange peels. Fookin' orange peels." >> privmsg "Just didn't add up."
+            , privmsg "Fookin', I was in the shops for milk, and I saw the weirdest thing I've ever seen in my life." >> privmsg "It was a toothbrush."
+            ]
+
 responses = [ ("@deedee", paranoidQuit)
             , ("dee dee", paranoidQuit)
             , ("frying pan", privmsg "Give it a wee dunt.")
@@ -101,14 +112,14 @@ talk h = forever $ do
   now <- liftIO getCurrentTime
   lastSaid <- lastDiff
   let diff = diffUTCTime now (timeLastSeen l)
-  when (diff > min && diff <= max && lastSaid > interval) (privmsg "Got one of them cockrings.")
+  when (diff > min && diff <= max && lastSaid > interval) (join partyChat)
   if (diff > min)
     then liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)
     else liftIO $ threadDelay $ 30 * (10 ^ 6)
   where
-    min = 2
+    min = 1 * 60
     max = 20 * 60
-    interval = 30
+    interval = 2 * 60
     forever a = a >> forever a
 -- min time: time after someone says something that Dee Dee will consider
 -- saying something himself.
