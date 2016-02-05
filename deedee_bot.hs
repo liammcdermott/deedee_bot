@@ -61,7 +61,7 @@ responses = [ ("@deedee", paranoidQuit)
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
 type Net = StateT Bot IO
-data Bot = Bot { socket :: Handle, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, something :: TVar Int, rng :: TVar StdGen }
+data Bot = Bot { socket :: Handle, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
 data LastSeen = LastSeen { postLastSeen :: String, timeLastSeen :: UTCTime } deriving (Show)
 
 -- Set up actions to run on start and end, and run the main loop
@@ -78,11 +78,10 @@ connect = notify $ do
   t' <- getCurrentTime
   t <- atomically (newTVar t')
   l <- atomically (newTVar $ LastSeen "" t')
-  tv <- atomically (newTVar 3)
   e' <- entropy
   e <- atomically (newTVar $ mkStdGen e')
   hSetBuffering h NoBuffering
-  return (Bot h l t tv e)
+  return (Bot h l t e)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
@@ -117,24 +116,15 @@ talk h = forever $ do
     then liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)
     else liftIO $ threadDelay $ 30 * (10 ^ 6)
   where
+    -- Time after a message is posted on IRC that deedee will consider
+    -- saying something himself.
     min = 1 * 60
-    max = 20 * 60
+    -- Time after someone saying something deedee will consider everyone
+    -- to have left, so he does not talk to an empty room.
+    max = 10 * 60
+    -- How often deedee should consider saying something.
     interval = 2 * 60
     forever a = a >> forever a
--- min time: time after someone says something that Dee Dee will consider
--- saying something himself.
---
--- max time: time after someone says something that Dee Dee will consider
--- everyone to have left, so he should not say anything to an empty room.
---
--- interval: how often Dee Dee should consider the above values.
---
--- probability: if all else aligns and Dee Dee considers it worth him
--- spinning some banter, what is the probability he actually will.
---
--- The first iteration should just say the odd random thing now and then,
--- future versions should wait for responses from people and respond
--- in kind.
 
 -- Process each line from the server
 listen :: Handle -> Net ()
