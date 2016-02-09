@@ -20,16 +20,27 @@ nick   = "enter your nick here"
 pass   = "enter your password here"
 
 partyChat = randomItem
-  [ privmsg "Fookin'" >> privmsg "I don't even know."
-  , privmsg "Fookin' I've been doing a power of sleeping right?" >> privmsg "Any time I've been wakening up, morning noon or night, I've just been like that" >> privmsg "Pfffff aye right. Back to sleep." >> privmsg "Honestly, every hour God sends man pure lying in my scratch all like a mad cat."
-  , privmsg "I just want to know if were up on that death slide or no, I could be in trouble with the police." >> (liftIO $ threadDelay (10 * (10 ^ 6))) >> privmsg "Cool right, just enough's enough, just leave it."
+  [ privmsg "Fookin' I don't even know."
+  , privmsg "Fookin'"
+  , privmsg "Do a power of sleeping right, any time you wake up just be like that, pffff aye right. Back to sleep."
+  , privmsg "People think that not working makes your head go to pot, but I spot things that other people haven't got the time for."
+  , privmsg "I just want to know if were up on that death slide or no, I could be in trouble with the police." 
   , privmsg "Fookin' heading to The Brew, heading to get my Giro."
-  , privmsg "This silence is ridiculous, never used to be like this with the corporation chat."
-  , privmsg "Fookin'" >> privmsg "I was on the bus right and out the corner of my eye I spots the scariest thing of my life." >> (liftIO $ threadDelay (5 * (10 ^ 6))) >> privmsg "Hanging out the pocket of the guy standing next to us. Orange peels. Fookin' orange peels." >> privmsg "Just didn't add up."
-  , privmsg "Fookin', I was in the shops for milk, and I saw the weirdest thing I've ever seen in my life." >> privmsg "It was a toothbrush."
+  , privmsg "This silence is ridiculous, never used to be like this with the corporation chats."
+  , privmsg "Scariest thing of my life. Hanging out the the pocket of the guy standing next to us. Fookin' orange peels."
+  , privmsg "Fookin', weirdest thing I've ever seen in my life. It was a toothbrush."
   , privmsg "Has everyone been subdued?"
-  , privmsg "What?!"
-  , privmsg "Aye, well that killed the conversation."
+  , privmsg "Aye? Well that killed the conversation."
+  , privmsg "Haaaaaaaaaaaa"
+  , privmsg "On comes Jeremy Kyle, 'He's not my Son He's a Ginger'. Looks like a good one, I'll set the tape."
+  , privmsg "Some wean's programme's on. Bird was like that, 'We're going to make a spaceship from cardboard boxes'."
+  , privmsg "Aye right."
+  , privmsg "Going to raid the bin shelters for cardboard boxes." >> (liftIO $ threadDelay $ 10 * 60 * 10 ^ 6) >> privmsg "Got some crackers. Sort of cardboard boxes you could build a real spaceship from, never mind a pretend one made of cardboard boxes."
+  , privmsg "Having some rocket fuel. A banana skin triple tardis bucket upside down on my couch."
+  , privmsg "Captain of the Starship DeeDee. Fucked oot mah nut."
+  , privmsg "Look below at all the people, they're tiny. And they were."
+  , privmsg "I've lost the plot, man."
+  , privmsg "Stumbled onto this Jobsearch thing, pure pish jobs but I'm out of my face so things are starting to take my fancy."
   ]
 
 responses = [ ("@deedee", paranoidQuit)
@@ -108,24 +119,30 @@ run = do
 -- Potentially say something if the room goes quiet.
 talk :: Handle -> Net ()
 talk h = forever $ do
-  l' <- gets lastSeen
-  l <- liftIO $ atomically (readTVar l')
+  l <- getLastSeen
   now <- liftIO getCurrentTime
-  lastSaid <- lastDiff
-  let diff = diffUTCTime now (timeLastSeen l)
-  when (diff > min && diff <= max && lastSaid > interval) (join partyChat)
-  if (diff > min)
-    then liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)
-    else liftIO $ threadDelay $ 30 * (10 ^ 6)
+  r <- randomNet (0 :: Int, 20 :: Int)
+  liftIO (putStrLn $ "NIGEL " ++ show r)
+  -- When deedee Said something, how long Ago that was.
+  sa <- lastDiff
+  -- How long ago was any post (by anyone) Last Seen.
+  let ls = diffUTCTime now (timeLastSeen l)
+  when (ls > min && ls <= max && sa > intervalAsDiff && sa > ls && r == 20) (join partyChat)
+  if (ls > min)
+    then liftIO $ threadDelay $ interval * 10 ^ 6
+    else liftIO $ threadDelay $ diffTimeToMicroseconds (min - ls)
   where
     -- Time after a message is posted on IRC that deedee will consider
     -- saying something himself.
-    min = 1 * 60
+    min = 3 * 60
     -- Time after someone saying something deedee will consider everyone
     -- to have left, so he does not talk to an empty room.
+    -- For example: if min is 3, max 10 and interval 3 mins, deedee will
+    -- consider talking 3 times.
     max = 10 * 60
     -- How often deedee should consider saying something.
-    interval = 2 * 60
+    interval = 3 * 60
+    intervalAsDiff = fromIntegral interval :: NominalDiffTime
     forever a = a >> forever a
 
 -- Process each line from the server
@@ -154,22 +171,31 @@ randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
 setLastSeen :: String -> Net ()
 setLastSeen x = gets lastSeen >>= \l -> liftIO getCurrentTime >>= \t -> liftIO $ atomically (writeTVar l $ LastSeen x t)
 
--- Raw show of last seen post data.
-getLastSeen :: Net String
+getLastSeen :: Net LastSeen
 getLastSeen = do
-  l' <- gets lastSeen
-  l <- liftIO $ atomically (readTVar l')
-  return (show l)
+  l <- gets lastSeen
+  liftIO $ atomically (readTVar l)
+
+getLastPosted :: Net UTCTime
+getLastPosted = do
+  t <- gets lastPosted
+  liftIO $ atomically (readTVar t)
 
 -- Dispatch a command
 eval :: String -> Net ()
 eval     "!quit"               = write "QUIT" ":Exiting" >> liftIO (exitWith ExitSuccess)
 eval     "!kill jester"        = write "KICK" (chan ++ " smallangrycrab")
-eval     "!last seen"          = getLastSeen >>= privmsg'
-eval     "!last said"          = getLastPosted >>= \s -> privmsg' s
+eval     "!last seen"          = getLastSeen >>= privmsg' . show
+eval     "!last said"          = getLastPosted >>= privmsg' . show
+eval     "!seen diff"          = liftIO getCurrentTime >>= \now -> getLastSeen >>= \l -> privmsg' $ show $ diffUTCTime now (timeLastSeen l)
+eval     "!talk possible"      = do
+                                    sa <- lastDiff
+                                    now <- liftIO getCurrentTime
+                                    l <- getLastSeen
+                                    privmsg' $ show ((diffUTCTime now $ timeLastSeen l) < sa)
 eval     "!last diff"          = let duntText = " since I last give it a wee dunt."
                                  in lastDiff >>= \t -> privmsg' ((show t) ++ duntText)
-eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay 20000000) >> privmsg "Amazing what they can do these days with threading and that."
+eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay (20 * 10 ^ 6)) >> privmsg "Amazing what they can do these days with threading and that."
 -- Pseudo-random, since it's not important.
 eval     "!random"             = randomNet ((0 :: Int), (100 :: Int)) >>= privmsg . show
 eval     "!source"             = privmsg "My source code is available at: https://github.com/liammcdermott/deedee_bot/blob/master/deedee_bot.hs you can submit changes to my responses there."
@@ -189,8 +215,7 @@ randomNet range = gets rng >>= \rt -> liftIO $ atomically (randomAtom rt range) 
 lastDiff :: Net NominalDiffTime
 lastDiff = do
   now <- liftIO getCurrentTime
-  zero' <- gets lastPosted
-  zero <- liftIO $ atomically (readTVar zero')
+  zero <- getLastPosted
   return $ diffUTCTime now zero
 
 otherResponse :: String -> Net ()
@@ -207,12 +232,6 @@ lookupResponse  key ((x,y):xys)
 
 strToLower :: String -> String
 strToLower s = [ toLower s' | s' <- s ]
-
-getLastPosted :: Net String
-getLastPosted = do
-  t' <- gets lastPosted
-  t <- liftIO $ atomically (readTVar t')
-  return (show t)
 
 -- Send a privmsg to the current chan + server
 privmsg :: String -> Net ()
@@ -233,7 +252,7 @@ write s t = do
     else (liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)) >> write s t
 
 diffTimeToMicroseconds :: NominalDiffTime -> Int
-diffTimeToMicroseconds x = ceiling (x * (10 ^ 6))
+diffTimeToMicroseconds x = ceiling (x * 10 ^ 6)
 
 -- Low level function, sends a message to the connected server.
 write' :: String -> String -> Net ()
