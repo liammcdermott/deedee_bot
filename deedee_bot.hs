@@ -111,6 +111,7 @@ run = do
   write "NICK" nick
   write "USER" (nick ++ " 0 * :deedee_bot")
   write "JOIN" chan
+  write "CAP" "REQ :twitch.tv/membership"
   privmsg "Scary man scary, but the best day of my life."
   sock <- gets socket
   state <- get
@@ -157,13 +158,24 @@ listen h = forever $ do
   where
     forever a = a >> forever a
 
+-- Respond to different types of events.
 preEval :: String -> Net ()
 preEval x | ping x     = pong x
+          | join x     = joinResponse x
+          | part x     = partResponse x
           | otherwise  = eval (clean x) >> setLastSeen (clean x)
   where
-    clean = drop 1 . dropWhile (/= ':') . drop 1
-    ping y = "PING :" `isPrefixOf` y
-    pong y = write "PONG" (':' : drop 6 y)
+    clean          = drop 1 . dropWhile (/= ':') . drop 1
+    ping y         = "PING :" `isPrefixOf` y
+    pong y         = write "PONG" (':' : drop 6 y)
+    -- Format: ':user!user@user.tmi.twitch.tv JOIN #chan'
+    join y         = "JOIN"  == jp y
+    part y         = "PART"  == jp y
+    jp             = reverse . take 4 . reverse . takeCmd
+    takeCmd        = init . takeWhile ('#' /=)
+    takeName       = takeWhile ('!' /=) . drop 1
+    joinResponse y = privmsg' $ (takeName y) ++ " joined."
+    partResponse y = privmsg' $ (takeName y) ++ " fooked off."
 
 randomItem :: [a] -> Net a
 randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
@@ -182,7 +194,7 @@ getLastPosted = do
   t <- gets lastPosted
   liftIO $ atomically (readTVar t)
 
--- Dispatch a command
+-- Dispatch a command.
 eval :: String -> Net ()
 eval     "!quit"               = write "QUIT" ":Exiting" >> liftIO (exitWith ExitSuccess)
 eval     "!kill jester"        = write "KICK" (chan ++ " smallangrycrab")
