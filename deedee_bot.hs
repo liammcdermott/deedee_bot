@@ -24,7 +24,7 @@ partyChat = randomItem
   , privmsg "Fookin'"
   , privmsg "Do a power of sleeping right, any time you wake up just be like that, pffff aye right. Back to sleep."
   , privmsg "People think that not working makes your head go to pot, but I spot things that other people haven't got the time for."
-  , privmsg "I just want to know if were up on that death slide or no, I could be in trouble with the police." 
+  , privmsg "I just want to know if were up on that death slide or no, I could be in trouble with the police."
   , privmsg "Fookin' heading to The Brew, heading to get my Giro."
   , privmsg "This silence is ridiculous, never used to be like this with the corporation chats."
   , privmsg "Scariest thing of my life. Hanging out the the pocket of the guy standing next to us. Fookin' orange peels."
@@ -33,14 +33,15 @@ partyChat = randomItem
   , privmsg "Aye? Well that killed the conversation."
   , privmsg "Haaaaaaaaaaaa"
   , privmsg "On comes Jeremy Kyle, 'He's not my Son He's a Ginger'. Looks like a good one, I'll set the tape."
-  , privmsg "Some wean's programme's on. Bird was like that, 'We're going to make a spaceship from cardboard boxes'."
-  , privmsg "Aye right."
+  , privmsg "Some wean's programme's on. Bird was like that, 'We're going to make a spaceship from cardboard boxes'. Aye right."
   , privmsg "Going to raid the bin shelters for cardboard boxes." >> (liftIO $ threadDelay $ 10 * 60 * 10 ^ 6) >> privmsg "Got some crackers. Sort of cardboard boxes you could build a real spaceship from, never mind a pretend one made of cardboard boxes."
   , privmsg "Having some rocket fuel. A banana skin triple tardis bucket upside down on my couch."
+  , privmsg "You'd think the kitchen knife would be the hard man of the kitchen, but chopping board's made to not give a fuck about the kitchen knife."
   , privmsg "Captain of the Starship DeeDee. Fucked oot mah nut."
   , privmsg "Look below at all the people, they're tiny. And they were."
   , privmsg "I've lost the plot, man."
   , privmsg "Stumbled onto this Jobsearch thing, pure pish jobs but I'm out of my face so things are starting to take my fancy."
+  , privmsg "Fookin' Nothing ventured…" >> privmsg "What?"
   ]
 
 responses = [ ("@deedee", paranoidQuit)
