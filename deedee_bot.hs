@@ -163,6 +163,7 @@ preEval :: String -> Net ()
 preEval x | ping x     = pong x
           | join x     = joinResponse x
           | part x     = partResponse x
+          | mode x     = return ()
           | otherwise  = eval (clean x) >> setLastSeen (clean x)
   where
     clean          = drop 1 . dropWhile (/= ':') . drop 1
@@ -171,10 +172,11 @@ preEval x | ping x     = pong x
     -- Format: ':user!user@user.tmi.twitch.tv JOIN #chan'
     join y         = "JOIN"  == jp y
     part y         = "PART"  == jp y
+    mode y         = "MODE"  == jp y
     jp             = reverse . take 4 . reverse . takeCmd
     takeCmd        = init . takeWhile ('#' /=)
     takeName       = takeWhile ('!' /=) . drop 1
-    joinResponse y = privmsg' $ (takeName y) ++ " joined."
+    joinResponse y = when (takeName y /= nick) (privmsg' $ (takeName y) ++ " joined.")
     partResponse y = privmsg' $ (takeName y) ++ " fooked off."
 
 randomItem :: [a] -> Net a
@@ -272,4 +274,4 @@ write' :: String -> String -> Net ()
 write' s t = do
     h <- gets socket
     liftIO $ hPrintf h "%s %s\r\n" s t
-    liftIO $ printf    "> %s %s\n" s t
+    liftIO $ putStrLn ("> " ++ s ++ " " ++ t)
