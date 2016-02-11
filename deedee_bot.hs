@@ -42,6 +42,7 @@ partyChat = randomItem
   , privmsg "I've lost the plot, man."
   , privmsg "Stumbled onto this Jobsearch thing, pure pish jobs but I'm out of my face so things are starting to take my fancy."
   , privmsg "Fookin' Nothing ventured…" >> privmsg "What?"
+  , privmsg "I'm starting to get tuned into the stream. Starting to get ideas."
   ]
 
 responses = [ ("@deedee", paranoidQuit)
@@ -175,9 +176,14 @@ preEval x | ping x     = pong x
     mode y         = "MODE"  == jp y
     jp             = reverse . take 4 . reverse . takeCmd
     takeCmd        = init . takeWhile ('#' /=)
-    takeName       = takeWhile ('!' /=) . drop 1
+    takeName       = changeName . takeWhile ('!' /=) . drop 1
     joinResponse y = when (takeName y /= nick) (privmsg' $ (takeName y) ++ " joined.")
     partResponse y = privmsg' $ (takeName y) ++ " fooked off."
+
+changeName "jeevesbond" = "Jeeves (late again) Bond"
+changeName "Taspira"    = "Tasrumpia"
+changeName "SirRufert"  = "Man who pisses himself as he gets arrested"
+changeName x            = x
 
 randomItem :: [a] -> Net a
 randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
