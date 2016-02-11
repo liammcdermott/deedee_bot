@@ -124,7 +124,7 @@ talk :: Handle -> Net ()
 talk h = forever $ do
   l <- getLastSeen
   now <- liftIO getCurrentTime
-  r <- randomNet (0 :: Int, 20 :: Int)
+  r <- randomNet (1 :: Int, 20 :: Int)
   liftIO (putStrLn $ "NIGEL " ++ show r)
   -- When deedee Said something, how long Ago that was.
   sa <- lastDiff
