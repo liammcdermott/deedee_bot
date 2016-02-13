@@ -160,10 +160,13 @@ listen h = forever $ do
     forever a = a >> forever a
 
 -- Respond to different types of events.
+-- If an event is not handled deedee will think it's someone talking, in
+-- the case where deedee uses the last said time for things not handling an
+-- event can cause bugs.
 preEval :: String -> Net ()
 preEval x | ping x     = pong x
-          | join x     = joinResponse x
-          | part x     = partResponse x
+          | join x     = return ()
+          | part x     = return ()
           | mode x     = return ()
           | otherwise  = eval (clean x) >> setLastSeen (clean x)
   where
@@ -181,8 +184,8 @@ preEval x | ping x     = pong x
     partResponse y = privmsg' $ (takeName y) ++ " fooked off."
 
 changeName "jeevesbond" = "Jeeves (late again) Bond"
-changeName "Taspira"    = "Tasrumpia"
-changeName "SirRufert"  = "Man who pisses himself as he gets arrested"
+changeName "taspira"    = "Tasrumpia"
+changeName "sirrufert"  = "Man who pisses himself as he gets arrested"
 changeName x            = x
 
 randomItem :: [a] -> Net a
