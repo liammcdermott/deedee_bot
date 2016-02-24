@@ -236,10 +236,10 @@ eval     "!last seen"          = getLastSeen >>= privmsg' . show
 eval     "!last said"          = getLastPosted >>= privmsg' . show
 eval     "!seen diff"          = liftIO getCurrentTime >>= \now -> getLastSeen >>= \l -> privmsg' $ show $ diffUTCTime now (timeLastSeen l)
 eval     "!talk possible"      = do
-                                    sa <- lastDiff
-                                    now <- liftIO getCurrentTime
-                                    l <- getLastSeen
-                                    privmsg' $ show ((diffUTCTime now $ timeLastSeen l) < sa)
+                                   sa <- lastDiff
+                                   now <- liftIO getCurrentTime
+                                   l <- getLastSeen
+                                   privmsg' $ show ((diffUTCTime now $ timeLastSeen l) < sa)
 eval     "!last diff"          = let duntText = " since I last give it a wee dunt."
                                  in lastDiff >>= \t -> privmsg' ((show t) ++ duntText)
 eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay (20 * 10 ^ 6)) >> privmsg "Amazing what they can do these days with threading and that."
@@ -318,7 +318,7 @@ hWriter = forever $ do
     forever a = a >> forever a
     msg h (Msg PRIVMSG x True) = (liftIO $ hPrintf h "%s %s\r\n" (show PRIVMSG) x) >> updateLastPosted
     msg h (Msg t x _)          = liftIO $ hPrintf h "%s %s\r\n" (show t) x
-    consoleMsg (Msg t x _)     = "> " ++ (show t) ++ " " ++ x ++ "\r\n"
+    consoleMsg (Msg t x _)     = "> " ++ (show t) ++ " " ++ x
 
 updateLastPosted :: Net ()
 updateLastPosted = do
