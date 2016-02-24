@@ -5,7 +5,7 @@ import System.IO
 import System.Exit
 import System.Random
 import Control.Arrow
-import Control.Monad.State
+import Control.Monad.Reader
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.STM
