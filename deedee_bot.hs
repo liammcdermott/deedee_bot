@@ -10,6 +10,7 @@ import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Concurrent.Async
+import Control.Concurrent.Chan
 import Text.Printf
 import Data.Char (toLower, isAlpha)
 
@@ -18,6 +19,9 @@ port   = 6667
 chan   = "#sirrufert"
 nick   = "enter your nick here"
 pass   = "enter your password here"
+-- Whether to show user join/part messages. Note: Twitch has caching which
+-- can make this feature appear to spam the chat.
+joins  = False
 
 partyChat = randomItem
   [ privmsg "Fookin' I don't even know."
@@ -69,14 +73,16 @@ responses = [ ("@deedee", paranoidQuit)
             , ("helloween", privmsg "Fookin' 45 45? I was like that: http://i.imgur.com/kgMvFfg.gifv")
             ]
   where
-    paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> privmsg "/me quits. Just wasn't worth it." >> write "QUIT" ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
-    yokerResponse r | r == 0 = privmsg "I'm not from Yoker, I've got no business being here!" >> privmsg "Gets to the bus but he wouldn't let me in. I was like that, set up, whole thing's a set up." >> privmsg "Them that were on that front bus, actors, the lot of them actors." >> privmsg "Door opens and I bolts upstairs, right under the seat. Didn't dare poke my head up for the next half hour in case they were going by in a minibus, gasping to feast on me like a shower of zombie pirates." >> privmsg "Picked a moment." >> privmsg "Quit the channel." >> write "QUIT" ":But the best day of my life." >> liftIO (exitWith ExitSuccess)
+    paranoidQuit = privmsg "Oh shite they found us. Run Dee Dee!" >> privmsg "/me quits. Just wasn't worth it." >> write QUIT ":Just wasn't worth it." >> liftIO (exitWith ExitSuccess)
+    yokerResponse r | r == 0 = privmsg "I'm not from Yoker, I've got no business being here!" >> privmsg "Gets to the bus but he wouldn't let me in. I was like that, set up, whole thing's a set up." >> privmsg "Them that were on that front bus, actors, the lot of them actors." >> privmsg "Door opens and I bolts upstairs , right under the seat. Didn't dare poke my head up for the next half hour in case they were going by in a minibus, gasping to feast on me like a shower of zombie pirates." >> privmsg "Picked a moment." >> privmsg "Quit the channel." >> write QUIT ":But the best day of my life." >> liftIO (exitWith ExitSuccess)
                     | r >= 1 = randomItem ["Yoker's one of these places I only know from the front of a bus. Never been there, don't know what it's like.", "Pure fabled land.", "Sounds like a pure mad egg yolk."] >>= privmsg
 
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
 type Net = StateT Bot IO
-data Bot = Bot { socket :: Handle, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
+data MsgType = PRIVMSG | QUIT | PASS | NICK | USER | JOIN | CAP | KICK | PONG deriving (Show)
+data Msg = Msg MsgType String Bool deriving (Show)
+data Bot = Bot { socket :: Handle, stdOutChan :: Chan String, socketChan :: Chan Msg, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
 data LastSeen = LastSeen { postLastSeen :: String, timeLastSeen :: UTCTime } deriving (Show)
 
 -- Set up actions to run on start and end, and run the main loop
@@ -95,8 +101,10 @@ connect = notify $ do
   l <- atomically (newTVar $ LastSeen "" t')
   e' <- entropy
   e <- atomically (newTVar $ mkStdGen e')
+  oc <- newChan
+  sc <- newChan
   hSetBuffering h NoBuffering
-  return (Bot h l t e)
+  return (Bot h oc sc l t e)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
@@ -108,20 +116,20 @@ connect = notify $ do
 -- Join a channel, and start processing commands
 run :: Net ()
 run = do
-  write "PASS" pass
-  write "NICK" nick
-  write "USER" (nick ++ " 0 * :deedee_bot")
-  write "JOIN" chan
-  write "CAP" "REQ :twitch.tv/membership"
+  write PASS pass
+  write NICK nick
+  write USER (nick ++ " 0 * :deedee_bot")
+  write JOIN chan
+  write CAP "REQ :twitch.tv/membership"
   privmsg "Scary man scary, but the best day of my life."
-  sock <- gets socket
   state <- get
-  r <- liftIO $ mapConcurrently (\f -> evalStateT (f sock) state) [talk, listen]
+  r <- liftIO $ mapConcurrently (\f -> evalStateT f state) [putStrLnWriter, hWriter, talk, listen]
   liftIO (putStrLn $ show r)
 
--- Potentially say something if the room goes quiet.
-talk :: Handle -> Net ()
-talk h = forever $ do
+-- Possibly say something if the room goes quiet.
+talk :: Net ()
+talk = forever $ do
+  h <- gets socket
   l <- getLastSeen
   now <- liftIO getCurrentTime
   r <- randomNet (1 :: Int, 20 :: Int)
@@ -148,11 +156,24 @@ talk h = forever $ do
     intervalAsDiff = fromIntegral interval :: NominalDiffTime
     forever a = a >> forever a
 
--- Process each line from the server
-listen :: Handle -> Net ()
-listen h = forever $ do
+-- Enqueue message for posting.
+enqueue :: Msg -> Net ()
+enqueue x = do
+  c <- gets socketChan
+  liftIO $ writeChan c x
+
+-- Enqueue line for writing to stdout.
+putLnQueue :: String -> Net ()
+putLnQueue x = do
+  c <- gets stdOutChan
+  liftIO $ writeChan c x
+
+-- Process each line from the server.
+listen :: Net ()
+listen = forever $ do
+  h <- gets socket
   s <- init `fmap` liftIO (hGetLine h)
-  liftIO (putStrLn s)
+  putLnQueue s
   st <- get
   liftIO . forkIO $ do
     evalStateT (preEval s) st
@@ -160,19 +181,21 @@ listen h = forever $ do
     forever a = a >> forever a
 
 -- Respond to different types of events.
--- If an event is not handled deedee will think it's someone talking, in
--- the case where deedee uses the last said time for things not handling an
--- event can cause bugs.
+-- If an event is not handled, deedee will think it's someone talking. In
+-- the case where deedee uses the last said time, not handling an event
+-- can cause bugs.
 preEval :: String -> Net ()
-preEval x | ping x     = pong x
-          | join x     = return ()
-          | part x     = return ()
-          | mode x     = return ()
-          | otherwise  = eval (clean x) >> setLastSeen (clean x)
+preEval x | ping x              = pong x
+          | join x && joins     = joinResponse x
+          | join x && not joins = return ()
+          | part x && joins     = partResponse x
+          | part x && not joins = return ()
+          | mode x              = return ()
+          | otherwise           = eval (clean x) >> setLastSeen (clean x)
   where
     clean          = drop 1 . dropWhile (/= ':') . drop 1
     ping y         = "PING :" `isPrefixOf` y
-    pong y         = write "PONG" (':' : drop 6 y)
+    pong y         = write PONG (':' : drop 6 y)
     -- Format: ':user!user@user.tmi.twitch.tv JOIN #chan'
     join y         = "JOIN"  == jp y
     part y         = "PART"  == jp y
@@ -207,8 +230,8 @@ getLastPosted = do
 
 -- Dispatch a command.
 eval :: String -> Net ()
-eval     "!quit"               = write "QUIT" ":Exiting" >> liftIO (exitWith ExitSuccess)
-eval     "!kill jester"        = write "KICK" (chan ++ " smallangrycrab")
+eval     "!quit"               = write QUIT ":Exiting" >> liftIO (exitWith ExitSuccess)
+eval     "!kill jester"        = write KICK (chan ++ " smallangrycrab")
 eval     "!last seen"          = getLastSeen >>= privmsg' . show
 eval     "!last said"          = getLastPosted >>= privmsg' . show
 eval     "!seen diff"          = liftIO getCurrentTime >>= \now -> getLastSeen >>= \l -> privmsg' $ show $ diffUTCTime now (timeLastSeen l)
@@ -259,28 +282,46 @@ strToLower s = [ toLower s' | s' <- s ]
 
 -- Send a privmsg to the current chan + server
 privmsg :: String -> Net ()
-privmsg s = privmsg' s
-  >> liftIO getCurrentTime >>= \t -> gets lastPosted >>= \lp' -> liftIO $ atomically (writeTVar lp' t)
+privmsg s = enqueue $ Msg PRIVMSG (chan ++ " :" ++ s) True
 
 -- Send a privmsg without updating lastPosted time.
-privmsg' s = write "PRIVMSG" (chan ++ " :" ++ s)
+privmsg' s = enqueue $ Msg PRIVMSG (chan ++ " :" ++ s) False
 
--- Send a message out to the server we're currently connected to.
--- Handles timing so bot does not flood the channel.
-write :: String -> String -> Net ()
-write s t = do
-  let min = 2
-  diff <- lastDiff
-  if diff > min
-    then write' s t
-    else (liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff)) >> write s t
+-- Enqueue a message for sending to the server we're currently connected to.
+write :: MsgType -> String -> Net ()
+write PRIVMSG m = privmsg m
+write t m       = enqueue $ Msg t m False
 
 diffTimeToMicroseconds :: NominalDiffTime -> Int
 diffTimeToMicroseconds x = ceiling (x * 10 ^ 6)
 
--- Low level function, sends a message to the connected server.
-write' :: String -> String -> Net ()
-write' s t = do
-    h <- gets socket
-    liftIO $ hPrintf h "%s %s\r\n" s t
-    liftIO $ putStrLn ("> " ++ s ++ " " ++ t)
+-- Writes the contents of a Chan to stdout without interleaving messages.
+putStrLnWriter :: Net ()
+putStrLnWriter = forever $ do
+  c <- gets stdOutChan
+  liftIO $ readChan c >>= putStrLn
+  where
+    forever a = a >> forever a
+
+hWriter :: Net ()
+hWriter = forever $ do
+  -- Minimum seconds between deedee posts.
+  let min = 2
+  diff <- lastDiff
+  when (diff < min) (liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff))
+  h <- gets socket
+  c <- gets socketChan
+  m <- liftIO $ readChan c
+  msg h m
+  putLnQueue (consoleMsg m)
+  where
+    forever a = a >> forever a
+    msg h (Msg PRIVMSG x True) = (liftIO $ hPrintf h "%s %s\r\n" (show PRIVMSG) x) >> updateLastPosted
+    msg h (Msg t x _)          = liftIO $ hPrintf h "%s %s\r\n" (show t) x
+    consoleMsg (Msg t x _)     = "> " ++ (show t) ++ " " ++ x ++ "\r\n"
+
+updateLastPosted :: Net ()
+updateLastPosted = do
+  t <- liftIO $ getCurrentTime
+  lp <- gets lastPosted
+  liftIO $ atomically (writeTVar lp t)
