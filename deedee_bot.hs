@@ -79,7 +79,7 @@ responses = [ ("@deedee", paranoidQuit)
 
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
-type Net = StateT Bot IO
+type Net = ReaderT Bot IO
 data MsgType = PRIVMSG | QUIT | PASS | NICK | USER | JOIN | CAP | KICK | PONG deriving (Show)
 data Msg = Msg MsgType String Bool deriving (Show)
 data Bot = Bot { socket :: Handle, stdOutChan :: Chan String, socketChan :: Chan Msg, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
