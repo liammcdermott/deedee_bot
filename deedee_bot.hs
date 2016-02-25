@@ -5,7 +5,7 @@ import System.IO
 import System.Exit
 import System.Random
 import Control.Arrow
-import Control.Monad.State
+import Control.Monad.Reader
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.STM
@@ -79,7 +79,7 @@ responses = [ ("@deedee", paranoidQuit)
 
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 -- type Net = ReaderT Bot IO
-type Net = StateT Bot IO
+type Net = ReaderT Bot IO
 data MsgType = PRIVMSG | QUIT | PASS | NICK | USER | JOIN | CAP | KICK | PONG deriving (Show)
 data Msg = Msg MsgType String Bool deriving (Show)
 data Bot = Bot { socket :: Handle, stdOutChan :: Chan String, socketChan :: Chan Msg, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
@@ -90,7 +90,7 @@ main :: IO ()
 main = bracket connect disconnect loop
   where
     disconnect = hClose . socket
-    loop st    = evalStateT run st
+    loop st    = runReaderT run st
 
 -- Connect to the server and return the initial bot state
 connect :: IO Bot
@@ -122,14 +122,14 @@ run = do
   write JOIN chan
   write CAP "REQ :twitch.tv/membership"
   privmsg "Scary man scary, but the best day of my life."
-  state <- get
-  r <- liftIO $ mapConcurrently (\f -> evalStateT f state) [putStrLnWriter, hWriter, talk, listen]
+  state <- ask
+  r <- liftIO $ mapConcurrently (\f -> runReaderT f state) [putStrLnWriter, hWriter, talk, listen]
   liftIO (putStrLn $ show r)
 
 -- Possibly say something if the room goes quiet.
 talk :: Net ()
 talk = forever $ do
-  h <- gets socket
+  h <- asks socket
   l <- getLastSeen
   now <- liftIO getCurrentTime
   r <- randomNet (1 :: Int, 20 :: Int)
@@ -159,24 +159,24 @@ talk = forever $ do
 -- Enqueue message for posting.
 enqueue :: Msg -> Net ()
 enqueue x = do
-  c <- gets socketChan
+  c <- asks socketChan
   liftIO $ writeChan c x
 
 -- Enqueue line for writing to stdout.
 putLnQueue :: String -> Net ()
 putLnQueue x = do
-  c <- gets stdOutChan
+  c <- asks stdOutChan
   liftIO $ writeChan c x
 
 -- Process each line from the server.
 listen :: Net ()
 listen = forever $ do
-  h <- gets socket
+  h <- asks socket
   s <- init `fmap` liftIO (hGetLine h)
   putLnQueue s
-  st <- get
+  st <- ask
   liftIO . forkIO $ do
-    evalStateT (preEval s) st
+    runReaderT (preEval s) st
   where
     forever a = a >> forever a
 
@@ -216,16 +216,16 @@ randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
 
 -- Sets the last seen record using string and current time.
 setLastSeen :: String -> Net ()
-setLastSeen x = gets lastSeen >>= \l -> liftIO getCurrentTime >>= \t -> liftIO $ atomically (writeTVar l $ LastSeen x t)
+setLastSeen x = asks lastSeen >>= \l -> liftIO getCurrentTime >>= \t -> liftIO $ atomically (writeTVar l $ LastSeen x t)
 
 getLastSeen :: Net LastSeen
 getLastSeen = do
-  l <- gets lastSeen
+  l <- asks lastSeen
   liftIO $ atomically (readTVar l)
 
 getLastPosted :: Net UTCTime
 getLastPosted = do
-  t <- gets lastPosted
+  t <- asks lastPosted
   liftIO $ atomically (readTVar t)
 
 -- Dispatch a command.
@@ -251,7 +251,7 @@ eval x                         = otherResponse (strToLower x)
 
 -- Get a random number and update the bot's state with the new generator.
 randomNet :: (Random a) => (a, a) -> Net a
-randomNet range = gets rng >>= \rt -> liftIO $ atomically (randomAtom rt range) >>= \(i, g) -> return i
+randomNet range = asks rng >>= \rt -> liftIO $ atomically (randomAtom rt range) >>= \(i, g) -> return i
   where
     randomAtom rt range = do
       r <- readTVar rt
@@ -298,7 +298,7 @@ diffTimeToMicroseconds x = ceiling (x * 10 ^ 6)
 -- Writes the contents of a Chan to stdout without interleaving messages.
 putStrLnWriter :: Net ()
 putStrLnWriter = forever $ do
-  c <- gets stdOutChan
+  c <- asks stdOutChan
   liftIO $ readChan c >>= putStrLn
   where
     forever a = a >> forever a
@@ -309,8 +309,8 @@ hWriter = forever $ do
   let min = 2
   diff <- lastDiff
   when (diff < min) (liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff))
-  h <- gets socket
-  c <- gets socketChan
+  h <- asks socket
+  c <- asks socketChan
   m <- liftIO $ readChan c
   msg h m
   putLnQueue (consoleMsg m)
@@ -323,5 +323,5 @@ hWriter = forever $ do
 updateLastPosted :: Net ()
 updateLastPosted = do
   t <- liftIO $ getCurrentTime
-  lp <- gets lastPosted
+  lp <- asks lastPosted
   liftIO $ atomically (writeTVar lp t)
