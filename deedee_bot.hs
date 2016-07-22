@@ -1,22 +1,25 @@
+import Prelude hiding (sequence)
 import Data.List
 import Data.Time
+import Data.Traversable as DT (sequence)
 import Network
 import System.IO
 import System.Exit
 import System.Random
 import Control.Arrow
-import Control.Monad.Reader
+import Control.Monad.Reader hiding (sequence)
+import Control.Monad.Loops (whileM_)
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Concurrent.Async
 import Control.Concurrent.Chan
 import Text.Printf
-import Data.Char (toLower, isAlpha)
+import Data.Char (toLower, isAlpha, isSpace)
 
 server = "irc.twitch.tv"
 port   = 6667
-chan   = "#sirrufert"
+chan   = ["#hello", "#world"]
 nick   = "enter your nick here"
 pass   = "enter your password here"
 -- Whether to show user join/part messages. Note: Twitch has caching which
@@ -69,7 +72,6 @@ responses = [ ("@deedee", paranoidQuit)
             , ("orange peel", randomItem ["Reminds of this bloke I met on the bus. He was a psycho.", "Orange peels. Fookin' orange peels. Just doesn't add up.", "Scariest thing I've ever seen in my life."] >>= privmsg)
             , ("les porter", privmsg "Here, what's the bets his name was Smith or something but he changed it to fit in.")
             , ("fookin", randomItem ["fookin'", "news"] >>= privmsg)
-            , ("jonathan boakes", privmsg "Fookin' I was on the train right, and the twat sitting opposite me is like that. Mmmm Ghost Stories. http://www.adventureclassicgaming.com/images/galleries/242/242_1.jpg" >> privmsg "But I thought to myself: Dee Dee, something's not right with this picture. That bloke's had that book open 20 minutes, pure intense reading but he's not got past the first page yet.")
             , ("helloween", privmsg "Fookin' 45 45? I was like that: http://i.imgur.com/kgMvFfg.gifv")
             ]
   where
@@ -78,71 +80,90 @@ responses = [ ("@deedee", paranoidQuit)
                     | r >= 1 = randomItem ["Yoker's one of these places I only know from the front of a bus. Never been there, don't know what it's like.", "Pure fabled land.", "Sounds like a pure mad egg yolk."] >>= privmsg
 
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
--- type Net = ReaderT Bot IO
-type Net = ReaderT Bot IO
+type Net = ReaderT Srv IO
 data MsgType = PRIVMSG | QUIT | PASS | NICK | USER | JOIN | CAP | KICK | PONG deriving (Show)
-data Msg = Msg MsgType String Bool deriving (Show)
-data Bot = Bot { socket :: Handle, stdOutChan :: Chan String, socketChan :: Chan Msg, lastSeen :: TVar LastSeen, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
+data Msg = Msg MsgType String Bool
+data Srv = Srv { socket :: Handle, srvBots :: Bots, thisBot :: Maybe Bot, stdOutChan :: Chan String, socketChan :: Chan Msg, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
+data Bot = Bot { ircChannel :: String, lastSeen :: TVar LastSeen, botLastPosted :: TVar UTCTime }
 data LastSeen = LastSeen { postLastSeen :: String, timeLastSeen :: UTCTime } deriving (Show)
+type Bots = [Bot]
 
 -- Set up actions to run on start and end, and run the main loop
 main :: IO ()
 main = bracket connect disconnect loop
   where
-    disconnect = hClose . socket
-    loop st    = runReaderT run st
+    disconnect   = hClose . socket
+    runBot srv b = runReaderT run srv { thisBot = Just b }
+    loop srv     = do
+      runReaderT run srv
+      as <- sequence . map (runBot srv) $ srvBots srv
+      waitAnyCancel as
+      return ()
 
 -- Connect to the server and return the initial bot state
-connect :: IO Bot
+connect :: IO Srv
 connect = notify $ do
   h <- connectTo server (PortNumber (fromIntegral port))
-  t' <- getCurrentTime
-  t <- atomically (newTVar t')
-  l <- atomically (newTVar $ LastSeen "" t')
-  e' <- entropy
-  e <- atomically (newTVar $ mkStdGen e')
+  t <- getCurrentTime >>= atomically . newTVar
   oc <- newChan
   sc <- newChan
+  r' <- getStdGen
+  r <- atomically (newTVar r')
+  forkIO $ putStrLnWriter oc
+  forkIO $ hWriter h oc sc t
   hSetBuffering h NoBuffering
-  return (Bot h oc sc l t e)
+  writeChan sc $ Msg PASS pass False
+  writeChan sc $ Msg NICK nick False
+  writeChan sc $ Msg USER (nick ++ " 0 * :deedee_bot") False
+  writeChan sc $ Msg CAP "REQ :twitch.tv/membership" False
+  bots <- sequence $ map (makeBot t) chan
+  return (Srv h bots Nothing oc sc t r)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
         (putStrLn "done.")
         a
-      entropy = getCurrentTime >>= return . (floor . utctDayTime :: UTCTime -> Int)
+
+makeBot :: TVar UTCTime -> String -> IO Bot
+makeBot t c = do
+  t' <- atomically (readTVar t)
+  l <- atomically (newTVar $ LastSeen "" t')
+  return (Bot c l t)
 
 -- We're in the Net monad now, so we've connected successfully
 -- Join a channel, and start processing commands
-run :: Net ()
+run :: Net (Async ())
 run = do
-  write PASS pass
-  write NICK nick
-  write USER (nick ++ " 0 * :deedee_bot")
-  write JOIN chan
-  write CAP "REQ :twitch.tv/membership"
-  privmsg "Scary man scary, but the best day of my life."
+  b <- asks thisBot
   state <- ask
-  r <- liftIO $ mapConcurrently (\f -> runReaderT f state) [putStrLnWriter, hWriter, talk, listen]
-  liftIO (putStrLn $ show r)
+  oc <- asks stdOutChan
+  case b of
+    -- This will be run without a Bot once, when the program starts.
+    Nothing -> liftIO $ async (runReaderT listen state)
+    Just bot -> do
+      let channel = ircChannel bot
+      write JOIN channel
+      privmsg "Scary man scary, but the best day of my life."
+      liftIO $ async $ runReaderT talk state
 
 -- Possibly say something if the room goes quiet.
 talk :: Net ()
-talk = forever $ do
-  h <- asks socket
-  l <- getLastSeen
+talk = withThisBot () $ \bot -> whileM_ socketOkay $ do
   now <- liftIO getCurrentTime
+  -- How long ago was a post (by anyone) last seen.
+  l <- liftIO $ atomically $ readTVar (lastSeen bot)
+  let lDiff = diffUTCTime now (timeLastSeen l)
   r <- randomNet (1 :: Int, 20 :: Int)
-  liftIO (putStrLn $ "NIGEL " ++ show r)
-  -- When deedee Said something, how long Ago that was.
-  sa <- lastDiff
-  -- How long ago was any post (by anyone) Last Seen.
-  let ls = diffUTCTime now (timeLastSeen l)
-  when (ls > min && ls <= max && sa > intervalAsDiff && sa > ls && r == 20) (join partyChat)
-  if (ls > min)
+  putLnQueue $ "NIGEL " ++ show r
+  -- @todo: make sure this is updated in the code where the bot posts something.
+  blp <- liftIO $ atomically $ readTVar (botLastPosted bot)
+  let sa = diffUTCTime now blp
+  when (iShouldPartyChat now lDiff sa r) (join partyChat)
+  if (lDiff > min)
     then liftIO $ threadDelay $ interval * 10 ^ 6
-    else liftIO $ threadDelay $ diffTimeToMicroseconds (min - ls)
+    else liftIO $ threadDelay $ diffTimeToMicroseconds (min - lDiff)
   where
+    iShouldPartyChat now ld sa r = ld > min && ld <= max && sa > ld && r == 20
     -- Time after a message is posted on IRC that deedee will consider
     -- saying something himself.
     min = 3 * 60
@@ -154,7 +175,12 @@ talk = forever $ do
     -- How often deedee should consider saying something.
     interval = 3 * 60
     intervalAsDiff = fromIntegral interval :: NominalDiffTime
-    forever a = a >> forever a
+
+socketOkay :: Net (Bool)
+socketOkay = do
+  h <- asks socket
+  eof <- liftIO $ hIsEOF h
+  return $ not eof
 
 -- Enqueue message for posting.
 enqueue :: Msg -> Net ()
@@ -170,15 +196,17 @@ putLnQueue x = do
 
 -- Process each line from the server.
 listen :: Net ()
-listen = forever $ do
+listen = whileM_ socketOkay $ do
   h <- asks socket
   s <- init `fmap` liftIO (hGetLine h)
   putLnQueue s
   st <- ask
-  liftIO . forkIO $ do
-    runReaderT (preEval s) st
+  let tb = [ bot | bot <- srvBots st, ircChannel bot == takeChan s]
+  case tb of [] -> runEval s st
+             (x:_) -> runEval s st { thisBot = Just x }
   where
-    forever a = a >> forever a
+    takeChan = takeWhile (not . isSpace) . dropWhile ('#' /=)
+    runEval s st = liftIO . forkIO $ runReaderT (preEval s) st
 
 -- Respond to different types of events.
 -- If an event is not handled, deedee will think it's someone talking. In
@@ -216,12 +244,33 @@ randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
 
 -- Sets the last seen record using string and current time.
 setLastSeen :: String -> Net ()
-setLastSeen x = asks lastSeen >>= \l -> liftIO getCurrentTime >>= \t -> liftIO $ atomically (writeTVar l $ LastSeen x t)
+setLastSeen x = do
+  t <- liftIO getCurrentTime
+  b <- asks thisBot
+  case b of
+    Nothing -> return ()
+    Just bot -> do
+      let ls = lastSeen bot
+      liftIO $ atomically (writeTVar ls $ LastSeen x t)
 
-getLastSeen :: Net LastSeen
+-- @todo: remove this and other Net (Maybe *) functions in favour of withBot.
+getLastSeen :: Net (Maybe LastSeen)
 getLastSeen = do
-  l <- asks lastSeen
-  liftIO $ atomically (readTVar l)
+  b <- asks thisBot
+  case b of
+    Nothing -> return Nothing
+    Just bot -> do
+      let ls = lastSeen bot
+      liftIO $ sequence $ Just $ atomically (readTVar ls)
+
+getBotLastPosted :: Net (Maybe UTCTime)
+getBotLastPosted = do
+  b <- asks thisBot
+  case b of
+    Nothing -> return Nothing
+    Just bot -> do
+      let lp = botLastPosted bot
+      liftIO $ sequence $ Just $ atomically (readTVar lp)
 
 getLastPosted :: Net UTCTime
 getLastPosted = do
@@ -231,19 +280,28 @@ getLastPosted = do
 -- Dispatch a command.
 eval :: String -> Net ()
 eval     "!quit"               = write QUIT ":Exiting" >> liftIO (exitWith ExitSuccess)
-eval     "!kill jester"        = write KICK (chan ++ " smallangrycrab")
-eval     "!last seen"          = getLastSeen >>= privmsg' . show
+eval     "!last seen"          = withThisBot () privmsgLastSeen
+                                   where
+                                     privmsgLastSeen bot = do
+                                       ls <- liftIO $ atomically $ readTVar (lastSeen bot)
+                                       privmsg' $ show ls
 eval     "!last said"          = getLastPosted >>= privmsg' . show
-eval     "!seen diff"          = liftIO getCurrentTime >>= \now -> getLastSeen >>= \l -> privmsg' $ show $ diffUTCTime now (timeLastSeen l)
-eval     "!talk possible"      = do
-                                   sa <- lastDiff
-                                   now <- liftIO getCurrentTime
-                                   l <- getLastSeen
-                                   privmsg' $ show ((diffUTCTime now $ timeLastSeen l) < sa)
+eval     "!seen diff"          = withThisBot () privmsgSeenDiff
+                                   where
+                                     privmsgSeenDiff bot = do
+                                       now <- liftIO getCurrentTime
+                                       ls <- liftIO $ atomically $ readTVar (lastSeen bot)
+                                       privmsg' $ show $ diffUTCTime now (timeLastSeen ls)
+eval     "!talk possible"      = withThisBot () talkPossible
+                                   where
+                                     talkPossible bot = do
+                                       sa <- lastDiff
+                                       now <- liftIO getCurrentTime
+                                       ls <- liftIO $ atomically $ readTVar (lastSeen bot)
+                                       privmsg' $ show $ diffUTCTime now (timeLastSeen ls) < sa
 eval     "!last diff"          = let duntText = " since I last give it a wee dunt."
                                  in lastDiff >>= \t -> privmsg' ((show t) ++ duntText)
 eval     "!wait test"          = privmsg "Aye, carry on this shouldn't block a thing" >> liftIO (threadDelay (20 * 10 ^ 6)) >> privmsg "Amazing what they can do these days with threading and that."
--- Pseudo-random, since it's not important.
 eval     "!random"             = randomNet ((0 :: Int), (100 :: Int)) >>= privmsg . show
 eval     "!source"             = privmsg "My source code is available at: https://github.com/liammcdermott/deedee_bot/blob/master/deedee_bot.hs you can submit changes to my responses there."
 eval x | "!id " `isPrefixOf` x = privmsg (drop 4 x)
@@ -258,6 +316,14 @@ randomNet range = asks rng >>= \rt -> liftIO $ atomically (randomAtom rt range) 
       let (i, g) = randomR range r
       writeTVar rt g
       return (i, g)
+
+lastBotDiff :: Net (Maybe NominalDiffTime)
+lastBotDiff = do
+  now <- liftIO getCurrentTime
+  z <- getBotLastPosted
+  case z of
+    Nothing -> return Nothing
+    Just zero -> return $ Just (diffUTCTime now zero)
 
 lastDiff :: Net NominalDiffTime
 lastDiff = do
@@ -282,10 +348,23 @@ strToLower s = [ toLower s' | s' <- s ]
 
 -- Send a privmsg to the current chan + server
 privmsg :: String -> Net ()
-privmsg s = enqueue $ Msg PRIVMSG (chan ++ " :" ++ s) True
+privmsg s = withThisBot () $ \bot -> enqueue $ Msg PRIVMSG ((ircChannel bot) ++ " :" ++ s) True
 
 -- Send a privmsg without updating lastPosted time.
-privmsg' s = enqueue $ Msg PRIVMSG (chan ++ " :" ++ s) False
+privmsg' :: String -> Net ()
+privmsg' s = withThisBot () $ \bot -> enqueue $ Msg PRIVMSG ((ircChannel bot) ++ " :" ++ s) False
+
+-- ThisBot assumes it's in the Net monad.
+withThisBot :: a -> (Bot -> Net a) -> Net a
+withThisBot s f = do
+  bot <- asks thisBot
+  withBot bot s f
+
+withBot :: (Maybe Bot) -> a -> (Bot -> Net a) -> Net a
+withBot b s f = do
+  case b of
+    Nothing -> return s
+    Just bot -> f bot
 
 -- Enqueue a message for sending to the server we're currently connected to.
 write :: MsgType -> String -> Net ()
@@ -296,32 +375,24 @@ diffTimeToMicroseconds :: NominalDiffTime -> Int
 diffTimeToMicroseconds x = ceiling (x * 10 ^ 6)
 
 -- Writes the contents of a Chan to stdout without interleaving messages.
-putStrLnWriter :: Net ()
-putStrLnWriter = forever $ do
-  c <- asks stdOutChan
-  liftIO $ readChan c >>= putStrLn
-  where
-    forever a = a >> forever a
+putStrLnWriter :: Chan String -> IO ()
+putStrLnWriter c = forever $ readChan c >>= putStrLn
 
-hWriter :: Net ()
-hWriter = forever $ do
+-- Writes contents of a Chan to IRC server handle (without interleaving).
+-- @TODO: Does stdOutChan need to be in Net ()?
+hWriter :: Handle -> Chan String -> Chan Msg -> TVar UTCTime -> IO ()
+hWriter h oc sc lp = forever $ do
   -- Minimum seconds between deedee posts.
   let min = 2
-  diff <- lastDiff
-  when (diff < min) (liftIO $ threadDelay $ diffTimeToMicroseconds (min - diff))
-  h <- asks socket
-  c <- asks socketChan
-  m <- liftIO $ readChan c
+  now <- getCurrentTime
+  t <- atomically (readTVar lp)
+  diff <- return $ diffUTCTime now t
+  when (diff < min) (threadDelay $ diffTimeToMicroseconds (min - diff))
+  m <- readChan sc
   msg h m
-  putLnQueue (consoleMsg m)
+  writeChan oc (consoleMsg m)
   where
-    forever a = a >> forever a
-    msg h (Msg PRIVMSG x True) = (liftIO $ hPrintf h "%s %s\r\n" (show PRIVMSG) x) >> updateLastPosted
-    msg h (Msg t x _)          = liftIO $ hPrintf h "%s %s\r\n" (show t) x
+    msg h (Msg PRIVMSG x True) = (hPrintf h "%s %s\r\n" (show PRIVMSG) x) >> updateTime lp
+    msg h (Msg t x _)          = hPrintf h "%s %s\r\n" (show t) x
     consoleMsg (Msg t x _)     = "> " ++ (show t) ++ " " ++ x
-
-updateLastPosted :: Net ()
-updateLastPosted = do
-  t <- liftIO $ getCurrentTime
-  lp <- asks lastPosted
-  liftIO $ atomically (writeTVar lp t)
+    updateTime t = getCurrentTime >>= \t' -> atomically (writeTVar t t')
