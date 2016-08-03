@@ -82,7 +82,7 @@ responses = [ ("@deedee", paranoidQuit)
 -- The 'Net' monad, a wrapper over IO, carrying the bot's state.
 type Net = ReaderT Srv IO
 data MsgType = PRIVMSG | QUIT | PASS | NICK | USER | JOIN | CAP | KICK | PONG deriving (Show)
-data Msg = Msg MsgType String Bool
+data Msg = Msg MsgType String (Maybe Srv)
 data Srv = Srv { socket :: Handle, srvBots :: Bots, thisBot :: Maybe Bot, stdOutChan :: Chan String, socketChan :: Chan Msg, lastPosted :: TVar UTCTime, rng :: TVar StdGen }
 data Bot = Bot { ircChannel :: String, lastSeen :: TVar LastSeen, botLastPosted :: TVar UTCTime }
 data LastSeen = LastSeen { postLastSeen :: String, timeLastSeen :: UTCTime } deriving (Show)
@@ -93,11 +93,11 @@ main :: IO ()
 main = bracket connect disconnect loop
   where
     disconnect   = hClose . socket
-    runBot srv b = runReaderT run srv { thisBot = Just b }
+    runBot srv b = runReaderT runChannel srv { thisBot = Just b }
     loop srv     = do
-      runReaderT run srv
+      l <- async (runReaderT listen srv)
       as <- sequence . map (runBot srv) $ srvBots srv
-      waitAnyCancel as
+      waitAnyCancel (l : as)
       return ()
 
 -- Connect to the server and return the initial bot state
@@ -110,13 +110,13 @@ connect = notify $ do
   r' <- getStdGen
   r <- atomically (newTVar r')
   forkIO $ putStrLnWriter oc
-  forkIO $ hWriter h oc sc t
+  forkIO $ hWriter h oc sc
   hSetBuffering h NoBuffering
-  writeChan sc $ Msg PASS pass False
-  writeChan sc $ Msg NICK nick False
-  writeChan sc $ Msg USER (nick ++ " 0 * :deedee_bot") False
-  writeChan sc $ Msg CAP "REQ :twitch.tv/membership" False
-  bots <- sequence $ map (makeBot t) chan
+  writeChan sc $ Msg PASS pass Nothing
+  writeChan sc $ Msg NICK nick Nothing
+  writeChan sc $ Msg USER (nick ++ " 0 * :deedee_bot") Nothing
+  writeChan sc $ Msg CAP "REQ :twitch.tv/membership" Nothing
+  bots <- sequence $ map makeBot chan
   return (Srv h bots Nothing oc sc t r)
     where
       notify a = bracket_
@@ -124,27 +124,26 @@ connect = notify $ do
         (putStrLn "done.")
         a
 
-makeBot :: TVar UTCTime -> String -> IO Bot
-makeBot t c = do
-  t' <- atomically (readTVar t)
-  l <- atomically (newTVar $ LastSeen "" t')
-  return (Bot c l t)
+makeBot :: String -> IO Bot
+makeBot c = do
+  t <- getCurrentTime
+  t' <- atomically $ newTVar t
+  l <- atomically (newTVar $ LastSeen "" t)
+  return (Bot c l t')
 
 -- We're in the Net monad now, so we've connected successfully
--- Join a channel, and start processing commands
-run :: Net (Async ())
-run = do
-  b <- asks thisBot
-  state <- ask
-  oc <- asks stdOutChan
-  case b of
-    -- This will be run without a Bot once, when the program starts.
-    Nothing -> liftIO $ async (runReaderT listen state)
-    Just bot -> do
-      let channel = ircChannel bot
-      write JOIN channel
-      privmsg "Scary man scary, but the best day of my life."
-      liftIO $ async $ runReaderT talk state
+-- Join a channel, and start an asynchronous talker.
+runChannel :: Net (Async ())
+runChannel = asks thisBot >>= runMuhBot
+  -- Passing this a srv without a bot will cause the program to exit
+  -- @see: main (specifically the waitAnyCancel part).
+  where runMuhBot Nothing = liftIO $ async $ return ()
+        runMuhBot (Just bot) = do
+          let channel = ircChannel bot
+          state <- ask
+          write JOIN channel
+          privmsg "Scary man scary, but the best day of my life."
+          liftIO $ async $ runReaderT talk state
 
 -- Possibly say something if the room goes quiet.
 talk :: Net ()
@@ -348,11 +347,13 @@ strToLower s = [ toLower s' | s' <- s ]
 
 -- Send a privmsg to the current chan + server
 privmsg :: String -> Net ()
-privmsg s = withThisBot () $ \bot -> enqueue $ Msg PRIVMSG ((ircChannel bot) ++ " :" ++ s) True
+privmsg s = withThisBot () $ \bot -> do
+  state <- ask
+  enqueue $ Msg PRIVMSG ((ircChannel bot) ++ " :" ++ s) $ Just state
 
 -- Send a privmsg without updating lastPosted time.
 privmsg' :: String -> Net ()
-privmsg' s = withThisBot () $ \bot -> enqueue $ Msg PRIVMSG ((ircChannel bot) ++ " :" ++ s) False
+privmsg' s = withThisBot () $ \bot -> enqueue $ Msg PRIVMSG ((ircChannel bot) ++ " :" ++ s) Nothing
 
 -- ThisBot assumes it's in the Net monad.
 withThisBot :: a -> (Bot -> Net a) -> Net a
@@ -361,15 +362,13 @@ withThisBot s f = do
   withBot bot s f
 
 withBot :: (Maybe Bot) -> a -> (Bot -> Net a) -> Net a
-withBot b s f = do
-  case b of
-    Nothing -> return s
-    Just bot -> f bot
+withBot (Just bot) _ f = f bot
+withBot Nothing s _ = return s
 
 -- Enqueue a message for sending to the server we're currently connected to.
 write :: MsgType -> String -> Net ()
 write PRIVMSG m = privmsg m
-write t m       = enqueue $ Msg t m False
+write t m       = enqueue $ Msg t m Nothing
 
 diffTimeToMicroseconds :: NominalDiffTime -> Int
 diffTimeToMicroseconds x = ceiling (x * 10 ^ 6)
@@ -379,20 +378,31 @@ putStrLnWriter :: Chan String -> IO ()
 putStrLnWriter c = forever $ readChan c >>= putStrLn
 
 -- Writes contents of a Chan to IRC server handle (without interleaving).
--- @TODO: Does stdOutChan need to be in Net ()?
-hWriter :: Handle -> Chan String -> Chan Msg -> TVar UTCTime -> IO ()
-hWriter h oc sc lp = forever $ do
-  -- Minimum seconds between deedee posts.
-  let min = 2
-  now <- getCurrentTime
-  t <- atomically (readTVar lp)
-  diff <- return $ diffUTCTime now t
-  when (diff < min) (threadDelay $ diffTimeToMicroseconds (min - diff))
+hWriter :: Handle -> Chan String -> Chan Msg -> IO ()
+hWriter h oc sc = whileM_ (hIsEOF h >>= return . not) $ do
   m <- readChan sc
+  delay <- delayAmount m
+  when (delay > 0) (threadDelay $ diffTimeToMicroseconds delay)
   msg h m
   writeChan oc (consoleMsg m)
   where
-    msg h (Msg PRIVMSG x True) = (hPrintf h "%s %s\r\n" (show PRIVMSG) x) >> updateTime lp
-    msg h (Msg t x _)          = hPrintf h "%s %s\r\n" (show t) x
-    consoleMsg (Msg t x _)     = "> " ++ (show t) ++ " " ++ x
-    updateTime t = getCurrentTime >>= \t' -> atomically (writeTVar t t')
+    delayAmount (Msg _ _ Nothing) = return 0
+    delayAmount (Msg _ _ (Just s)) = do
+      now <- getCurrentTime
+      t <- runReaderT (asks lastPosted >>= liftIO . atomically . readTVar) s
+      let diff = diffUTCTime now t
+      return $ min - diff
+    msg h (Msg t x (Just s)) = do
+      hPrintf h "%s %s\r\n" (show t) x
+      runReaderT updateTime s
+      return ()
+    msg h (Msg t x Nothing)      = hPrintf h "%s %s\r\n" (show t) x
+    consoleMsg (Msg t x _)       = "> " ++ (show t) ++ " " ++ x
+    updateTime = do
+      time <- liftIO getCurrentTime
+      lp <- asks lastPosted
+      bot <- asks thisBot
+      withThisBot () (\b -> liftIO $ atomically $ writeTVar (botLastPosted b) time)
+      liftIO $ atomically $ writeTVar lp time
+    -- Minimum seconds between deedee posts.
+    min = 2
