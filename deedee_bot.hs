@@ -218,20 +218,24 @@ preEval x | ping x              = pong x
           | part x && joins     = partResponse x
           | part x && not joins = return ()
           | mode x              = return ()
-          | otherwise           = eval (clean x) >> setLastSeen (clean x)
+          | otherwise           = eval (clean x) >> withThisBot () (setLastSeen (clean x))
   where
-    clean          = drop 1 . dropWhile (/= ':') . drop 1
-    ping y         = "PING :" `isPrefixOf` y
-    pong y         = write PONG (':' : drop 6 y)
+    clean             = drop 1 . dropWhile (/= ':') . drop 1
+    ping y            = "PING :" `isPrefixOf` y
+    pong y            = write PONG (':' : drop 6 y)
     -- Format: ':user!user@user.tmi.twitch.tv JOIN #chan'
-    join y         = "JOIN"  == jp y
-    part y         = "PART"  == jp y
-    mode y         = "MODE"  == jp y
-    jp             = reverse . take 4 . reverse . takeCmd
-    takeCmd        = init . takeWhile ('#' /=)
-    takeName       = changeName . takeWhile ('!' /=) . drop 1
-    joinResponse y = when (takeName y /= nick) (privmsg' $ (takeName y) ++ " joined.")
-    partResponse y = privmsg' $ (takeName y) ++ " fooked off."
+    join y            = "JOIN"  == jp y
+    part y            = "PART"  == jp y
+    mode y            = "MODE"  == jp y
+    jp                = reverse . take 4 . reverse . takeCmd
+    takeCmd           = init . takeWhile ('#' /=)
+    takeName          = changeName . takeWhile ('!' /=) . drop 1
+    joinResponse y    = when (takeName y /= nick) (privmsg' $ (takeName y) ++ " joined.")
+    partResponse y    = privmsg' $ (takeName y) ++ " fooked off."
+    setLastSeen x bot = do
+                          t <- liftIO getCurrentTime
+                          liftIO $ atomically $ writeTVar (lastSeen bot) (LastSeen x t)
+
 
 changeName "jeevesbond" = "Jeeves (late again) Bond"
 changeName "taspira"    = "Tasrumpia"
@@ -241,41 +245,6 @@ changeName x            = x
 randomItem :: [a] -> Net a
 randomItem l = randomNet (0, length l - 1) >>= \i -> return $ l !! i
 
--- Sets the last seen record using string and current time.
-setLastSeen :: String -> Net ()
-setLastSeen x = do
-  t <- liftIO getCurrentTime
-  b <- asks thisBot
-  case b of
-    Nothing -> return ()
-    Just bot -> do
-      let ls = lastSeen bot
-      liftIO $ atomically (writeTVar ls $ LastSeen x t)
-
--- @todo: remove this and other Net (Maybe *) functions in favour of withBot.
-getLastSeen :: Net (Maybe LastSeen)
-getLastSeen = do
-  b <- asks thisBot
-  case b of
-    Nothing -> return Nothing
-    Just bot -> do
-      let ls = lastSeen bot
-      liftIO $ sequence $ Just $ atomically (readTVar ls)
-
-getBotLastPosted :: Net (Maybe UTCTime)
-getBotLastPosted = do
-  b <- asks thisBot
-  case b of
-    Nothing -> return Nothing
-    Just bot -> do
-      let lp = botLastPosted bot
-      liftIO $ sequence $ Just $ atomically (readTVar lp)
-
-getLastPosted :: Net UTCTime
-getLastPosted = do
-  t <- asks lastPosted
-  liftIO $ atomically (readTVar t)
-
 -- Dispatch a command.
 eval :: String -> Net ()
 eval     "!quit"               = write QUIT ":Exiting" >> liftIO (exitWith ExitSuccess)
@@ -284,7 +253,11 @@ eval     "!last seen"          = withThisBot () privmsgLastSeen
                                      privmsgLastSeen bot = do
                                        ls <- liftIO $ atomically $ readTVar (lastSeen bot)
                                        privmsg' $ show ls
-eval     "!last said"          = getLastPosted >>= privmsg' . show
+eval     "!last said"          = withThisBot () privmsgLastSaid
+                                   where
+                                     privmsgLastSaid bot = do
+                                       t <- liftIO $ atomically $ readTVar (botLastPosted bot)
+                                       privmsg' $ show t
 eval     "!seen diff"          = withThisBot () privmsgSeenDiff
                                    where
                                      privmsgSeenDiff bot = do
@@ -316,18 +289,11 @@ randomNet range = asks rng >>= \rt -> liftIO $ atomically (randomAtom rt range) 
       writeTVar rt g
       return (i, g)
 
-lastBotDiff :: Net (Maybe NominalDiffTime)
-lastBotDiff = do
-  now <- liftIO getCurrentTime
-  z <- getBotLastPosted
-  case z of
-    Nothing -> return Nothing
-    Just zero -> return $ Just (diffUTCTime now zero)
-
 lastDiff :: Net NominalDiffTime
 lastDiff = do
   now <- liftIO getCurrentTime
-  zero <- getLastPosted
+  lp <- asks lastPosted
+  zero <- liftIO $ atomically $ readTVar lp
   return $ diffUTCTime now zero
 
 otherResponse :: String -> Net ()
