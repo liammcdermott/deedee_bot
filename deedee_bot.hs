@@ -148,7 +148,7 @@ runChannel = asks thisBot >>= runMuhBot
 
 -- Possibly say something if the room goes quiet.
 talk :: Net ()
-talk = withThisBot () $ \bot -> whileM_ socketOkay $ do
+talk = withThisBot () $ \bot -> forever $ do
   now <- liftIO getCurrentTime
   -- How long ago was a post (by anyone) last seen.
   l <- liftIO $ atomically $ readTVar (lastSeen bot)
@@ -176,12 +176,6 @@ talk = withThisBot () $ \bot -> whileM_ socketOkay $ do
     interval = 3 * 60
     intervalAsDiff = fromIntegral interval :: NominalDiffTime
 
-socketOkay :: Net (Bool)
-socketOkay = do
-  h <- asks socket
-  eof <- liftIO $ hIsEOF h
-  return $ not eof
-
 -- Enqueue message for posting.
 enqueue :: Msg -> Net ()
 enqueue x = do
@@ -196,7 +190,7 @@ putLnQueue x = do
 
 -- Process each line from the server.
 listen :: Net ()
-listen = whileM_ socketOkay $ do
+listen = forever $ do
   h <- asks socket
   s <- init `fmap` liftIO (hGetLine h)
   putLnQueue s
@@ -346,7 +340,7 @@ putStrLnWriter c = forever $ readChan c >>= putStrLn
 
 -- Writes contents of a Chan to IRC server handle (without interleaving).
 hWriter :: Handle -> Chan String -> Chan Msg -> IO ()
-hWriter h oc sc = whileM_ (hIsEOF h >>= return . not) $ do
+hWriter h oc sc = forever $ do
   m <- readChan sc
   delay <- delayAmount m
   when (delay > 0) (threadDelay $ diffTimeToMicroseconds delay)
