@@ -92,16 +92,16 @@ type Bots = [Bot]
 main :: IO ()
 main = bracket connect disconnect loop
   where
-    disconnect   = hClose . socket
-    runBot srv b = runReaderT runChannel srv { thisBot = Just b }
-    loop srv     = do
+    disconnect (srv, _, _) = hClose $ socket srv
+    runBot srv b       = runReaderT runChannel srv { thisBot = Just b }
+    loop (srv, sw, hw) = do
       l <- async (runReaderT listen srv)
       as <- sequence . map (runBot srv) $ srvBots srv
-      waitAnyCancel (l : as)
+      waitAnyCancel (sw : hw : l : as)
       return ()
 
 -- Connect to the server and return the initial bot state
-connect :: IO Srv
+connect :: IO (Srv, Async (), Async ())
 connect = notify $ do
   h <- connectTo server (PortNumber (fromIntegral port))
   t <- getCurrentTime >>= atomically . newTVar
@@ -109,15 +109,16 @@ connect = notify $ do
   sc <- newChan
   r' <- getStdGen
   r <- atomically (newTVar r')
-  forkIO $ putStrLnWriter oc
-  forkIO $ hWriter h oc sc
+  sw <- async $ putStrLnWriter oc
+  hw <- async $ hWriter h oc sc
   hSetBuffering h NoBuffering
   writeChan sc $ Msg PASS pass Nothing
   writeChan sc $ Msg NICK nick Nothing
   writeChan sc $ Msg USER (nick ++ " 0 * :deedee_bot") Nothing
   writeChan sc $ Msg CAP "REQ :twitch.tv/membership" Nothing
   bots <- sequence $ map makeBot chan
-  return (Srv h bots Nothing oc sc t r)
+  let srv = Srv h bots Nothing oc sc t r
+  return (srv, sw, hw)
     where
       notify a = bracket_
         (printf "Connecting to %s ... " server >> hFlush stdout)
