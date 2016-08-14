@@ -8,7 +8,6 @@ import System.Exit
 import System.Random
 import Control.Arrow
 import Control.Monad.Reader hiding (sequence)
-import Control.Monad.Loops (whileM_)
 import Control.Exception
 import Control.Concurrent
 import Control.Concurrent.STM
@@ -158,12 +157,12 @@ talk = withThisBot () $ \bot -> forever $ do
   -- @todo: make sure this is updated in the code where the bot posts something.
   blp <- liftIO $ atomically $ readTVar (botLastPosted bot)
   let sa = diffUTCTime now blp
-  when (iShouldPartyChat now lDiff sa r) (join partyChat)
+  when (iShouldPartyChat lDiff sa r) (join partyChat)
   if (lDiff > min)
     then liftIO $ threadDelay $ interval * 10 ^ 6
     else liftIO $ threadDelay $ diffTimeToMicroseconds (min - lDiff)
   where
-    iShouldPartyChat now ld sa r = ld > min && ld <= max && sa > ld && r == 20
+    iShouldPartyChat ld sa r = ld > min && ld <= max && sa > ld && r == 20
     -- Time after a message is posted on IRC that deedee will consider
     -- saying something himself.
     min = 3 * 60
