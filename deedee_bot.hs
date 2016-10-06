@@ -55,7 +55,7 @@ responses = [ ("@deedee", paranoidQuit)
             , ("dee dee", paranoidQuit)
             , ("frying pan", privmsg "Give it a wee dunt.")
             , ("chopping board", privmsg "Chopping board. Aye, chopping board's made to not give a fuck about the kitchen knife.")
-            , ("denone", privmsg "But is it 'denone' or 'dennun'? I stayed awake for 24 hours straight once, trying to sort it out.")
+            , ("danone", privmsg "But is it 'danone' or 'dannun'? I stayed awake for 24 hours straight once, trying to sort it out.")
             , ("lost crown", privmsg "I was like that http://i.imgur.com/uCAr7zS.gifv")
             , ("laughing cow", randomItem ["Seriously, Dee Dee. Imagine you saw a cow that laughed."
                                           , "Imagine you were walking down some country road one night, lost, and you stopped to see this cow wander up to the fence next to you. And when it got there, it looked you right in the eyes, and laughed."
